@@ -1,0 +1,123 @@
+  // NtQueryVirtualMemory hook function
+  NTSTATUS NTAPI Cloaker::NtQueryVirtualMemory_Hook(
+    IN HANDLE ProcessHandle, 
+    IN PVOID BaseAddress, 
+    IN MEMORY_INFORMATION_CLASS MemoryInformationClass, 
+    OUT PVOID Buffer, 
+    IN ULONG Length, 
+    OUT PULONG ResultLength OPTIONAL)
+  {
+    typedef NTSTATUS (NTAPI* tNtQueryVirtualMemory)(HANDLE ProcessHandle, 
+      PVOID BaseAddress, MEMORY_INFORMATION_CLASS MemoryInformationClass, 
+      PVOID Buffer, ULONG Length, PULONG ResultLength);
+
+    tNtQueryVirtualMemory pNtQueryVirtualMemory = m_pNtQueryVirtualMemory->
+      GetOrig<tNtQueryVirtualMemory>();
+
+    // Make a backup of the buffer (For extra security. Potentially safer 
+    // than nulling out the buffer to hide.)
+    std::vector<BYTE> TempBuffer;
+    // Wrap in try/catch in case of access violations
+    try
+    {
+        std::copy(reinterpret_cast<PBYTE>(Buffer), 
+          reinterpret_cast<PBYTE>(Buffer) + Length, 
+          std::back_inserter(TempBuffer));
+    }
+    // In case of error just call the original API. If the above doesn't 
+    // work then the buffer is obviously invalid so the API call will 
+    // fail anyway, hence no more checks need to be done.
+    catch (...)
+    {
+      return pNtQueryVirtualMemory(ProcessHandle, BaseAddress, 
+        MemoryInformationClass, Buffer, Length, ResultLength);
+    }
+
+    // Call original function
+    NTSTATUS Result = pNtQueryVirtualMemory(ProcessHandle, BaseAddress, 
+      MemoryInformationClass, Buffer, Length, ResultLength);
+
+    try
+    {
+      // Don't bother trying to hide if the function failed or the process 
+      // handle is invalid.
+      if (FAILED(Result) || GetProcessId(ProcessHandle) != 
+        GetCurrentProcessId())
+      {
+        return Result;
+      }
+
+      // Don't bother trying to hide if information class is irrelevant
+      if (MemoryInformationClass != MemoryBasicInformation && 
+        MemoryInformationClass != MemorySectionName)
+      {
+        return Result;
+      }
+
+      // Check if base address is inside any of the modules we want to hide
+      bool ShouldHide = false;
+      std::for_each(GetModuleList().begin(), GetModuleList().end(), 
+        [&ShouldHide, BaseAddress] (Module* pModule)
+      {
+        PBYTE ModBase = reinterpret_cast<PBYTE>(pModule->m_Handle);
+        PBYTE ModEnd = ModBase + pModule->m_Size;
+        if (BaseAddress >= ModBase && BaseAddress <= ModEnd)
+          ShouldHide = true;
+      });
+
+      // Don't bother trying to hide if the module isn't in a hidden range.
+      if (!ShouldHide)
+      {
+        return Result;
+      }
+
+      // Check for section name retrieval
+      if (MemoryInformationClass == MemorySectionName)
+      {
+        // Restore the backup of the buffer (extra security)
+        std::copy(TempBuffer.begin(), TempBuffer.end(), 
+          reinterpret_cast<PBYTE>(Buffer));
+
+        // Call original API with invalid address
+        return pNtQueryVirtualMemory(ProcessHandle, NULL, 
+          MemoryInformationClass, Buffer, Length, ResultLength);
+      }
+
+      // MemorySectionName has already been handled and the only other 
+      // supported information class is MemoryBasicInformation so if we 
+      // get here that's what we have.
+
+      // Convert buffer to MEMORY_BASIC_INFORMATION
+      PMEMORY_BASIC_INFORMATION pMBI = static_cast<PMEMORY_BASIC_INFORMATION>(
+        Buffer);
+
+      // Next memory block
+      PVOID NextBase = reinterpret_cast<PBYTE>(pMBI->BaseAddress) + 
+        pMBI->RegionSize;
+
+      // Return next block of memory
+      MEMORY_BASIC_INFORMATION NextBlock;
+      ULONG NextLength = 0;
+      Result = pNtQueryVirtualMemory(ProcessHandle, NextBase, 
+        MemoryInformationClass, &NextBlock, sizeof(NextBlock), &NextLength);
+
+      // Set structure to look like a free block of memory
+      pMBI->AllocationBase = 0;
+      pMBI->AllocationProtect = 0;
+      pMBI->State = MEM_FREE;
+      pMBI->Protect = PAGE_NOACCESS;
+      pMBI->Type = 0;
+
+      // If next block is free too, add it to the region size
+      if (NextBlock.State == MEM_FREE)
+        pMBI->RegionSize += NextBlock.RegionSize;
+
+      // Return result
+      return Result;
+    }
+    catch (...)
+    {
+      // Return result
+      return Result;
+    }
+  }
