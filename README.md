@@ -1,3 +1,3 @@
-![ScreenShot] (https://imgflip.com/i/ilwwf)
+![ScreenShot] (https://i.imgflip.com/ilwwf.jpg)
 
 666
