@@ -1,8 +1,3 @@
-# beginner
-derp
-
-sure you code "wecodez"...LMFAO
-
-I SEE AND HEAR EVERYTHING
+![ScreenShot] (https://imgflip.com/i/ilwwf)
 
 666
