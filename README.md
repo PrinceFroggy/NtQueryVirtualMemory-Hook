@@ -1,4 +1,4 @@
 # beginner
 derp
 
-wecodez more like wechoke
+sure you code "wecodez"... 
